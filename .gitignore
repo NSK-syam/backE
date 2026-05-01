@@ -1,0 +1,18 @@
+# Virtual environment — never commit this (thousands of files)
+.venv/
+venv/
+env/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+
+# VS Code settings (optional — remove this line if you want to share settings)
+.vscode/
+
+# Mac system file
+.DS_Store
+
+# Environment variables (passwords, API keys — never commit these)
+.env
