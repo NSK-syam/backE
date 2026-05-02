@@ -1,81 +1,118 @@
 from flask import Flask, jsonify, request
-
-# "request" is a special Flask object that holds everything
-# the client sent us: body, headers, URL args, etc.
+import sqlite3   # built into Python — no pip install needed!
 
 app = Flask(__name__)
 
-# ─── In-memory "database" (just a Python list for now) ───────────────────────
-# Real apps use an actual database. We'll get there.
-products = [
-    {"id": 1, "name": "Laptop",  "price": 999},
-    {"id": 2, "name": "Phone",   "price": 499},
-    {"id": 3, "name": "Monitor", "price": 299},
-]
+# ─────────────────────────────────────────────────────────────────────────────
+# WHAT IS A DATABASE?
+# A database is a file that stores data permanently on disk.
+# SQLite stores everything in a single file: products.db
+# Think of it like an Excel spreadsheet but for code.
+#
+# TABLE = a spreadsheet tab
+# ROW   = one record (one product)
+# COLUMN = a field (id, name, price)
+# ─────────────────────────────────────────────────────────────────────────────
 
 
-# ─── GET / → Home — just confirms the API is alive ───────────────────────────
+def get_db():
+    """Open a connection to the SQLite database file."""
+    # sqlite3.connect() opens (or creates) the file products.db
+    conn = sqlite3.connect("products.db")
+    # row_factory makes rows return as dicts {id:1, name:"Laptop"}
+    # instead of plain tuples (1, "Laptop")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    """Create the products table if it doesn't exist yet."""
+    conn = get_db()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS products (
+            id    INTEGER PRIMARY KEY AUTOINCREMENT,
+            name  TEXT    NOT NULL,
+            price INTEGER NOT NULL
+        )
+    """)
+    # Seed 3 products only if the table is empty
+    count = conn.execute("SELECT COUNT(*) FROM products").fetchone()[0]
+    if count == 0:
+        conn.execute("INSERT INTO products (name, price) VALUES ('Laptop',  999)")
+        conn.execute("INSERT INTO products (name, price) VALUES ('Phone',   499)")
+        conn.execute("INSERT INTO products (name, price) VALUES ('Monitor', 299)")
+        conn.commit()
+        print(">>> Database seeded with 3 products")
+    conn.close()
+
+
+# ─── Run init_db() once when the server starts ───────────────────────────────
+init_db()
+
+
+# ─── GET / → Home ────────────────────────────────────────────────────────────
 @app.route("/")
 def home():
     return jsonify({
-        "message": "API is running!",
+        "message": "API is running with SQLite!",
         "routes": ["GET /products", "POST /products", "POST /login"]
     })
 
-# ─── GET /products → READ: return all products ───────────────────────────────
-# HTTP method: GET  (just fetching data, not changing anything)
+
+# ─── GET /products → READ all products from database ─────────────────────────
 @app.route("/products", methods=["GET"])
 def get_products():
+    conn = get_db()
+    # SQL: SELECT * FROM products means "give me all rows from products table"
+    rows = conn.execute("SELECT * FROM products").fetchall()
+    conn.close()
+
+    # Convert rows to a list of plain dicts so jsonify can handle them
+    products = [dict(row) for row in rows]
+    print(f">>> Returning {len(products)} products from database")
     return jsonify(products)
 
 
-# ─── POST /products → CREATE: add a new product ──────────────────────────────
-# HTTP method: POST  (client is SENDING us data to create something)
+# ─── POST /products → CREATE a new product in database ───────────────────────
 @app.route("/products", methods=["POST"])
 def create_product():
-    # request.json reads the JSON body the client sent
-    # Example body the client sends:
-    # { "name": "Keyboard", "price": 149 }
     data = request.json
-
     print(">>> Client sent us:", data)
 
-    # Basic validation — did they send us the required fields?
     if not data or "name" not in data or "price" not in data:
-        # 400 = Bad Request (client sent wrong/missing data)
         return jsonify({"error": "name and price are required"}), 400
 
-    # Build the new product
-    new_product = {
-        "id": len(products) + 1,   # auto-increment id
-        "name": data["name"],
-        "price": data["price"]
-    }
+    conn = get_db()
+    # SQL INSERT: adds a new row to the products table
+    cursor = conn.execute(
+        "INSERT INTO products (name, price) VALUES (?, ?)",
+        (data["name"], data["price"])   # ? prevents SQL injection attacks
+    )
+    conn.commit()   # save the change to disk (like Ctrl+S)
 
-    products.append(new_product)   # add to our "database"
+    # Get the new product back from the database
+    new_product = dict(conn.execute(
+        "SELECT * FROM products WHERE id = ?", (cursor.lastrowid,)
+    ).fetchone())
+    conn.close()
 
-    print(">>> New product created:", new_product)
-    print(">>> Total products now:", len(products))
-
-    # 201 = Created (standard status code for successful POST)
+    print(">>> Created product:", new_product)
     return jsonify(new_product), 201
 
 
-# ─── POST /login → authenticate a user ───────────────────────────────────────
-# Another common use of POST — sending credentials
+# ─── POST /login ──────────────────────────────────────────────────────────────
 @app.route("/login", methods=["POST"])
 def login():
     data = request.json
     print(">>> Login attempt:", data)
 
-    # Hardcoded user for now (real apps check a database)
     if data["username"] == "syam" and data["password"] == "1234":
         return jsonify({"success": True, "message": "Welcome back, Syam!"})
     else:
-        # 401 = Unauthorized (wrong credentials)
         return jsonify({"success": False, "error": "Wrong username or password"}), 401
 
 
 if __name__ == "__main__":
     app.run(port=4260, debug=True)
+
 
