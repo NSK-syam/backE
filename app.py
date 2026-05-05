@@ -22,14 +22,23 @@ def get_db():
 def init_db():
     conn = get_db()
 
-    # Products table (same as before)
+    # Products table — user_id links each product to its owner
     conn.execute("""
         CREATE TABLE IF NOT EXISTS products (
-            id    INTEGER PRIMARY KEY AUTOINCREMENT,
-            name  TEXT    NOT NULL,
-            price INTEGER NOT NULL
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            name    TEXT    NOT NULL,
+            price   INTEGER NOT NULL,
+            user_id INTEGER REFERENCES users(id)
         )
     """)
+
+    # Migration: add user_id column if it doesn't exist yet
+    # (safe to run every time — ALTER TABLE fails silently if column exists)
+    try:
+        conn.execute("ALTER TABLE products ADD COLUMN user_id INTEGER REFERENCES users(id)")
+        conn.commit()
+    except Exception:
+        pass  # column already exists — that's fine
 
     # Users table — NEW
     # password_hash: we never store plain passwords, only the hashed version
@@ -116,7 +125,13 @@ def home():
         "message": "API running!",
         "routes": {
             "auth":     ["POST /register", "POST /login"],
-            "products": ["GET /products", "POST /products"],
+            "products": [
+                "GET /products",
+                "GET /products/<id>",
+                "POST /products",
+                "PUT /products/<id>",
+                "DELETE /products/<id>"
+            ],
             "protected":["GET /profile  (needs token)"]
         }
     })
@@ -237,19 +252,39 @@ def get_products():
     return jsonify([dict(r) for r in rows])
 
 
+@app.route("/products/<int:product_id>", methods=["GET"])
+def get_product(product_id):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM products WHERE id = ?", (product_id,)
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        return jsonify({"error": "Product not found"}), 404
+
+    return jsonify(dict(row)), 200
+
+
 @app.route("/products", methods=["POST"])
 def create_product():
+    # 1. Who is making this request?
+    user_id = get_current_user()
+    if not user_id:
+        return jsonify({"error": "Login required"}), 401
+
     data = request.json
 
-    # Validate with our helper
+    # 2. Validate the product fields
     error = validate_product(data)
     if error:
         return jsonify({"error": error}), 400
 
+    # 3. Save product WITH the owner's user_id
     conn = get_db()
     cursor = conn.execute(
-        "INSERT INTO products (name, price) VALUES (?, ?)",
-        (data["name"], data["price"])
+        "INSERT INTO products (name, price, user_id) VALUES (?, ?, ?)",
+        (data["name"], data["price"], user_id)
     )
     conn.commit()
     new_product = dict(conn.execute(
@@ -257,6 +292,78 @@ def create_product():
     ).fetchone())
     conn.close()
     return jsonify(new_product), 201
+
+
+@app.route("/products/<int:product_id>", methods=["PUT"])
+def update_product(product_id):
+    # 1. Who is making this request?
+    user_id = get_current_user()
+    if not user_id:
+        return jsonify({"error": "Login required"}), 401
+
+    data = request.json
+
+    # 2. Validate fields
+    error = validate_product(data)
+    if error:
+        return jsonify({"error": error}), 400
+
+    conn = get_db()
+
+    # 3. Does this product exist?
+    existing = conn.execute(
+        "SELECT * FROM products WHERE id = ?", (product_id,)
+    ).fetchone()
+    if not existing:
+        conn.close()
+        return jsonify({"error": "Product not found"}), 404
+
+    # 4. Does this user OWN this product?
+    if existing["user_id"] != user_id:
+        conn.close()
+        return jsonify({"error": "You can only edit your own products"}), 403
+
+    conn.execute(
+        "UPDATE products SET name = ?, price = ? WHERE id = ?",
+        (data["name"], data["price"], product_id)
+    )
+    conn.commit()
+
+    updated_product = dict(conn.execute(
+        "SELECT * FROM products WHERE id = ?", (product_id,)
+    ).fetchone())
+    conn.close()
+
+    return jsonify(updated_product), 200
+
+
+@app.route("/products/<int:product_id>", methods=["DELETE"])
+def delete_product(product_id):
+    # 1. Who is making this request?
+    user_id = get_current_user()
+    if not user_id:
+        return jsonify({"error": "Login required"}), 401
+
+    conn = get_db()
+
+    # 2. Does this product exist?
+    existing = conn.execute(
+        "SELECT * FROM products WHERE id = ?", (product_id,)
+    ).fetchone()
+    if not existing:
+        conn.close()
+        return jsonify({"error": "Product not found"}), 404
+
+    # 3. Does this user OWN this product?
+    if existing["user_id"] != user_id:
+        conn.close()
+        return jsonify({"error": "You can only delete your own products"}), 403
+
+    conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"message": f"Product {product_id} deleted successfully"}), 200
 
 
 if __name__ == "__main__":
