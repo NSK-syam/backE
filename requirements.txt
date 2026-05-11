@@ -4,3 +4,5 @@ bcrypt==5.0.0
 PyJWT==2.12.1
 python-dotenv==1.2.1
 Werkzeug==3.1.8
+flask-limiter==3.11.0
+

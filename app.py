@@ -10,8 +10,19 @@ from psycopg2.extras import RealDictCursor
 import bcrypt      # hashes passwords so they aren't stored as plain text
 import jwt         # creates and verifies JWT tokens
 import datetime    # for token expiry time
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 app = Flask(__name__)
+
+# Rate limiter — tracks requests by IP address
+# default_limits applies to ALL routes unless overridden
+limiter = Limiter(
+    get_remote_address,           # identifies each user by their IP
+    app=app,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://"       # stores counts in RAM (fine for single server)
+)
 
 # Secret is now loaded from .env — never hardcoded here
 JWT_SECRET = os.getenv("JWT_SECRET", "fallback_only_for_dev")
@@ -150,6 +161,7 @@ def home():
 
 # ─── POST /register ───────────────────────────────────────────────────────────
 @app.route("/register", methods=["POST"])
+@limiter.limit("3 per hour")   # prevent mass account creation
 def register():
     data = request.json
 
@@ -187,6 +199,7 @@ def register():
 
 # ─── POST /login ──────────────────────────────────────────────────────────────
 @app.route("/login", methods=["POST"])
+@limiter.limit("5 per minute")   # max 5 login attempts per minute per IP
 def login():
     data = request.json
 
@@ -469,9 +482,32 @@ def health_ready():
             conn.close()
 
 
+# ─── GLOBAL ERROR HANDLERS ───────────────────────────────────────────────────
+# These catch errors that happen ANYWHERE in the app
+# Without these, Flask returns ugly HTML error pages — not useful for an API
+
+@app.errorhandler(404)
+def not_found(e):
+    """Triggered when a route doesn't exist."""
+    return jsonify({"error": "Route not found", "status": 404}), 404
+
+
+@app.errorhandler(405)
+def method_not_allowed(e):
+    """Triggered when you use wrong HTTP method (e.g. GET on a POST-only route)."""
+    return jsonify({"error": "Method not allowed", "status": 405}), 405
+
+
+@app.errorhandler(500)
+def internal_error(e):
+    """Triggered when an unhandled exception crashes the app."""
+    return jsonify({"error": "Something went wrong on the server", "status": 500}), 500
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 4260))   # Railway sets PORT automatically
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
     
