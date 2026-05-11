@@ -471,7 +471,7 @@ def health_ready():
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 4260))   # Railway sets PORT automatically
-    app.run(port=port, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=True)
 
 
     
